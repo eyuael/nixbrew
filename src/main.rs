@@ -1,3 +1,146 @@
-fn main() {
-    println!("Hello, world!");
+use anyhow::{anyhow, Result};
+use clap::{Parser, Subcommand};
+use std::process::Stdio;
+use tokio::process::Command;
+
+// Define the structure of our command-line interface using Clap's derive macros.
+#[derive(Parser)]
+#[command(name = "nixbrew")]
+#[command(about = "A Homebrew-like CLI for Nix's imperative package management", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+// Define the subcommands: install, uninstall, etc.
+#[derive(Subcommand)]
+enum Commands {
+    /// Install a package from nixpkgs
+    Install {
+        /// The name of the package to install (e.g., ripgrep)
+        package: String,
+    },
+    /// Uninstall a package
+    Uninstall {
+        /// The name of the package to uninstall
+        package: String,
+    },
+    /// Search for a package in nixpkgs
+    Search {
+        /// The search query
+        query: String,
+    },
+    /// List installed packages
+    List,
+    /// Update the nixpkgs flake (like 'brew update')
+    Update,
+    /// Upgrade a specific package
+    Upgrade {
+        /// The name of the package to upgrade
+        package: String,
+    },
+}
+
+// Helper function to run a `nix` command and pipe its output to the console.
+async fn run_nix_command(args: Vec<&str>) -> Result<()> {
+    let mut full_args = vec![
+        "--extra-experimental-features", "nix-command",
+        "--extra-experimental-features", "flakes"
+    ];
+    full_args.extend(args);
+    
+    let status = Command::new("nix")
+        .args(full_args)
+        .stdout(Stdio::inherit()) // Forward nix's stdout to our stdout
+        .stderr(Stdio::inherit()) // Forward nix's stderr to our stderr
+        .status()
+        .await?;
+
+    if !status.success() {
+        // If nix failed, return an error with its exit code
+        return Err(anyhow!(
+            "Nix command failed with exit code {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
+
+    Ok(())
+}
+
+// The main logic for each command
+async fn handle_command(cmd: Commands) -> Result<()> {
+    match cmd {
+        Commands::Install { package } => {
+            println!("Installing {}...", package);
+            run_nix_command(vec![
+                "profile",
+                "add",
+                &format!("nixpkgs#{}", package),
+            ])
+            .await
+        }
+        Commands::Uninstall { package } => {
+            // Find the package's index in the profile.
+            println!("Finding package '{}' to uninstall...", package);
+            let list_output = Command::new("nix")
+                .args(["profile", "list"])
+                .output()
+                .await?;
+
+            if !list_output.status.success() {
+                return Err(anyhow!("Failed to run 'nix profile list'"));
+            }
+
+            let list_str = String::from_utf8(list_output.stdout)?;
+            let mut pkg_index: Option<String> = None;
+
+            for line in list_str.lines() {
+                // The output looks like: "3  nixpkgs#cowsay-3.04"
+                if line.contains(&format!("nixpkgs#{}", package)) {
+                    pkg_index = line.split_whitespace().next().map(String::from);
+                    break;
+                }
+            }
+
+            match pkg_index {
+                Some(index) => {
+                    println!("Uninstalling {} (index: {})...", package, index);
+                    run_nix_command(vec!["profile", "remove", &index]).await
+                }
+                None => Err(anyhow!("Package '{}' not found in profile.", package)),
+            }
+        }
+        Commands::Search { query } => {
+            run_nix_command(vec!["search", "nixpkgs", &query]).await
+        }
+        Commands::List => {
+            run_nix_command(vec!["profile", "list"]).await
+        }
+        Commands::Update => {
+            println!("Updating nixpkgs flake...");
+            run_nix_command(vec!["flake", "update", "nixpkgs"]).await
+        }
+        Commands::Upgrade { package } => {
+            println!("Upgrading {}...", package);
+            run_nix_command(vec![
+                "profile",
+                "add",
+                &format!("nixpkgs#{}", package),
+                "--reinstall",
+            ])
+            .await
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    // Parse the CLI arguments
+    let cli = Cli::parse();
+
+    // Run the command and handle any errors gracefully
+    if let Err(e) = handle_command(cli.command).await {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 }
