@@ -85,14 +85,9 @@ async fn run_nix_command(args: Vec<&str>) -> Result<()> {
 async fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::Install { package, version } => {
-            let version_str = version.as_deref().unwrap_or("");
-            println!("Installing {}...", package);
-            run_nix_command(vec![
-                "profile",
-                "add",
-                &format!("nixpkgs#{}", package),
-            ])
-            .await
+          println!("Installing {}{}...", package, version.as_ref().map(|v| format!(" version {}", v)).unwrap_or_default());
+          let flake_url = build_flake_url(&package, version.as_deref())?;
+          run_nix_command(vec!["profile", "add", &flake_url]).await
         }
         Commands::Uninstall { package } => {
             // Find the package's index in the profile.
@@ -147,12 +142,17 @@ async fn handle_command(cmd: Commands) -> Result<()> {
         }
         Commands::Versions { package } => {
             println!("Listing versions of {}...", package);
-            run_nix_command(vec![
+            let channels = ["nixpkgs", "nixpkgs/23.11", "nixpkgs/23.05"];
+            for channel in &channels {
+              println!("\nChecking {}:", channel);
+              run_nix_command(vec![
                 "flake",
                 "show",
-                &format!("nixpkgs#{}", package),
-            ])
-            .await
+                &format!("{}#{}", channel, package),
+              ])
+              .await?;
+            }Ok(())
+            
         }
         Commands::Pin { package, version } => {
             println!("Pinning {} to version {}...", package, version);
@@ -167,10 +167,30 @@ async fn handle_command(cmd: Commands) -> Result<()> {
         }
     }
 }
-
-fn build_flake_url(package: &str, version: &str) -> String {
-    format!("nixpkgs#{}", package)
+fn build_flake_url(package: &str, version: Option<&str>) -> Result<String> {
+    match version {
+        Some(v) => {
+            // Handle different version formats
+            if v.matches('.').count() == 1 && v.chars().all(|c| c.is_ascii_digit()) {
+                // Channel format like "23.11"
+                Ok(format!("nixpkgs/{}#{}", v, package))
+            } else if v.len() == 7 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                // Commit hash format like "cb82756"
+                Ok(format!("github:NixOS/nixpkgs/{}#{}", v, package))
+            } else if v.contains('.') {
+                // Semantic version like "14.1.0" - need to find specific package version
+                // This is more complex and requires searching nixpkgs history
+                Ok(format!("nixpkgs#{}", package)) // Fallback for now
+            } else {
+                // Unknown format, treat as channel
+                Ok(format!("nixpkgs/{}#{}", v, package))
+            }
+        }
+        None => Ok(format!("nixpkgs#{}", package)),
+    }
 }
+
+
 
 #[tokio::main]
 async fn main() {
