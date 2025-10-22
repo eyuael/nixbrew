@@ -19,6 +19,8 @@ enum Commands {
     Install {
         /// The name of the package to install (e.g., ripgrep)
         package: String,
+        /// Optional version or channel to install (e.g., "1.2.3" or "nixpkgs-23.05"), or commit hash
+        version: Option<String>,
     },
     /// Uninstall a package
     Uninstall {
@@ -38,6 +40,18 @@ enum Commands {
     Upgrade {
         /// The name of the package to upgrade
         package: String,
+    },
+    ///List all available versions of a package
+    Versions {
+        /// The name of the package to list versions for
+        package: String,
+    },
+    /// Pin a package to a specific version
+    Pin {
+        /// The name of the package to pin
+        package: String,
+        /// The version to pin the package to (e.g., "1.2.3")
+        version: String,
     },
 }
 
@@ -70,7 +84,8 @@ async fn run_nix_command(args: Vec<&str>) -> Result<()> {
 // The main logic for each command
 async fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
-        Commands::Install { package } => {
+        Commands::Install { package, version } => {
+            let version_str = version.as_deref().unwrap_or("");
             println!("Installing {}...", package);
             run_nix_command(vec![
                 "profile",
@@ -130,7 +145,31 @@ async fn handle_command(cmd: Commands) -> Result<()> {
             ])
             .await
         }
+        Commands::Versions { package } => {
+            println!("Listing versions of {}...", package);
+            run_nix_command(vec![
+                "flake",
+                "show",
+                &format!("nixpkgs#{}", package),
+            ])
+            .await
+        }
+        Commands::Pin { package, version } => {
+            println!("Pinning {} to version {}...", package, version);
+            run_nix_command(vec![
+                "profile",
+                "add",
+                &format!("nixpkgs#{}", package),
+                "--pin",
+                &version,
+            ])
+            .await
+        }
     }
+}
+
+fn build_flake_url(package: &str, version: &str) -> String {
+    format!("nixpkgs#{}", package)
 }
 
 #[tokio::main]
