@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: Prepare binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            mv target/release/nixbrew.exe nixbrew-windows-x86_64.exe
+          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
+            mv target/release/nixbrew nixbrew-macos-$(uname -m)
+          else
+            mv target/release/nixbrew nixbrew-linux-x86_64
+          fi
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nixbrew-${{ matrix.os }}
+          path: |
+            nixbrew-*
+  
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            nixbrew-*/nixbrew-*
